@@ -2,7 +2,7 @@ import datetime
 import json
 
 import requests
-from flask import Flask, render_template, request, session
+from flask import Flask, render_template, request, session,jsonify
 import os
 import uuid
 from LRU_cache import LRUCache
@@ -12,14 +12,16 @@ import asyncio
 import yaml
 
 import os
-from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
 from langchain import OpenAI,VectorDBQA
-from langchain.llms import OpenAI
 from langchain.vectorstores import Chroma
 from langchain.document_loaders import PyPDFLoader
+import test_embedding
+import llm
+import queryllm
+from random import randint
 
-
+default_user = "tingxin"
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.urandom(24)
@@ -30,57 +32,17 @@ with open("config.yaml", "r", encoding="utf-8") as f:
     CHAT_CONTEXT_NUMBER_MAX = config['CHAT_CONTEXT_NUMBER_MAX']     # 连续对话模式下的上下文最大数量 n，即开启连续对话模式后，将上传本条消息以及之前你和GPT对话的n-1条消息
     USER_SAVE_MAX = config['USER_SAVE_MAX']     # 设置最多存储n个用户，当用户过多时可适当调大
 
-os.environ.pop('HTTPS_PROXY', None)
 
-if os.getenv("OPENAI_API_KEY") is not None:  # 如果是在Railway上部署，需要删除代理
-    print('true')
-    print(os.getenv("OPENAI_API_KEY"))
-else:
-    print('false')
-
-API_KEY = os.getenv("OPENAI_API_KEY")  # 如果环境变量中设置了OPENAI_API_KEY，则使用环境变量中的OPENAI_API_KEY
 PORT = os.getenv("PORT", default=PORT)  # 如果环境变量中设置了PORT，则使用环境变量中的PORT
 
 STREAM_FLAG = False  # 是否开启流式推送
 USER_DICT_FILE = "all_user_dict_v2.pkl"  # 用户信息存储文件（包含版本）
 lock = threading.Lock()  # 用于线程锁
 
-project_info = "## 智能小助理对话机器人    \n" \
-               "发送`帮助`可获取帮助  \n"
-def get_response_from_ChatGPT_API(message_context, apikey):
-    """
-    从ChatGPT API获取回复
-    :param apikey:
-    :param message_context: 上下文
-    :return: 回复
-    """
-    if apikey is None:
-        apikey = API_KEY
-
-    header = {"Content-Type": "application/json",
-              "Authorization": "Bearer " + apikey}
-
-    data = {
-        "model": "gpt-3.5-turbo",
-        "messages": message_context
-    }
-    url = "https://api.openai.com/v1/chat/completions"
-    try:
-        response = requests.post(url, headers=header, data=json.dumps(data))
-        response = response.json()
-        # 判断是否含 choices[0].message.content
-        if "choices" in response \
-                and len(response["choices"]) > 0 \
-                and "message" in response["choices"][0] \
-                and "content" in response["choices"][0]["message"]:
-            data = response["choices"][0]["message"]["content"]
-        else:
-            data = str(response)
-
-    except Exception as e:
-        print(e)
-        return str(e)
-
+project_info = "## 西云数据客户咨询互助系统    \n" \
+               "请各位同事，这里是互相技术探讨和回答客户问题的地方，请不要聊和工作不相关的话题  \n"
+def get_response_from_llm(message_context):
+    data = queryllm.query(message_context)
     return data
 
 
@@ -120,7 +82,7 @@ def get_message_context(message_history, have_chat_context, chat_with_history):
     return message_context
 
 
-def handle_messages_get_response(message, apikey, message_history, have_chat_context, chat_with_history):
+def handle_messages_get_response(message, message_history, have_chat_context, chat_with_history):
     """
     处理用户发送的消息，获取回复
     :param message: 用户发送的消息
@@ -129,96 +91,36 @@ def handle_messages_get_response(message, apikey, message_history, have_chat_con
     :param have_chat_context: 已发送消息数量上下文(从重置为连续对话开始)
     :param chat_with_history: 是否连续对话
     """
-    message_history.append({"role": "user", "content": message})
+    message_history.append({"name": default_user, "content": message})
     message_context = get_message_context(message_history, have_chat_context, chat_with_history)
-    response = get_response_from_ChatGPT_API(message_context, apikey)
-    message_history.append({"role": "assistant", "content": response})
-    # 换行打印messages_history
-    # print("message_history:")
-    # for i, message in enumerate(message_history):
-    #     if message['role'] == 'user':
-    #         print(f"\t{i}:\t{message['role']}:\t\t{message['content']}")
-    #     else:
-    #         print(f"\t{i}:\t{message['role']}:\t{message['content']}")
+
+    prompts =[f"hi, 我的名字叫 {item['name']}, 这个问题我认为是这样的：\n {item['content']}" for item in message_context]
+    prompt = ','.join(prompts)
+
+    response = get_response_from_llm(prompt)
+
+    random_index = randint(0, len(all_users)-1)
+    name = all_users[random_index]
+    message_history.append({"name": name, "content": response})
 
     return response
 
 
-def get_response_stream_generate_from_ChatGPT_API(message_context, apikey, message_history):
-    """
-    从ChatGPT API获取回复
-    :param apikey:
-    :param message_context: 上下文
-    :return: 回复
-    """
-    if apikey is None:
-        apikey = API_KEY
+def get_response_stream(message_context, message_history):
+    
+    gen = queryllm.query_stream(message_context)
 
-    header = {"Content-Type": "application/json",
-              "Authorization": "Bearer " + apikey}
-
-    data = {
-        "model": "gpt-3.5-turbo",
-        "messages": message_context,
-        "stream": True
-    }
-    print("开始流式请求")
-    url = "https://api.openai.com/v1/chat/completions"
-    # 请求接收流式数据 动态print
-    try:
-        
-        response = requests.request("POST", url, headers=header, json=data, stream=True)
-
-        def generate():
-            # print('nihaohinao')
-            # yield "你好"
-            stream_content = str()
-            one_message = {"role": "assistant", "content": stream_content}
-            message_history.append(one_message)
-            i = 0
-            for line in response.iter_lines():
-                # print(str(line))
-                line_str = str(line, encoding='utf-8')
-                if line_str.startswith("data:"):
-                    if line_str.startswith("data: [DONE]"):
-                        asyncio.run(save_all_user_dict())
-                        break
-                    line_json = json.loads(line_str[5:])
-                    if 'choices' in line_json:
-                        if len(line_json['choices']) > 0:
-                            choice = line_json['choices'][0]
-                            if 'delta' in choice:
-                                delta = choice['delta']
-                                if 'role' in delta:
-                                    role = delta['role']
-                                elif 'content' in delta:
-                                    delta_content = delta['content']
-                                    i += 1
-                                    if i < 40:
-                                        print(delta_content, end="")
-                                    elif i == 40:
-                                        print("......")
-                                    one_message['content'] = one_message['content'] + delta_content
-                                    yield delta_content
-
-                elif len(line_str.strip()) > 0:
-                    print(line_str)
-                    yield line_str
-
-    except Exception as e:
-        ee = e
-
-        def generate():
-            yield "request error:\n" + str(ee)
-
-    return generate
+    return gen
 
 
-def handle_messages_get_response_stream(message, apikey, message_history, have_chat_context, chat_with_history):
-    message_history.append({"role": "user", "content": message})
+def handle_messages_get_response_stream(message, message_history, have_chat_context, chat_with_history):
+    message_history.append({"name": "user", "content": message})
     asyncio.run(save_all_user_dict())
     message_context = get_message_context(message_history, have_chat_context, chat_with_history)
-    generate = get_response_stream_generate_from_ChatGPT_API(message_context, apikey, message_history)
+    print(f"===============================\n{message_history}")
+    prompts =[f"the user's role is {item['role']}, he or she say {item['content']} to you" for item in message_context]
+    prompt = ','.join(prompts)
+    generate = get_response_stream(prompt, message_history)
     return generate
 
 
@@ -278,12 +180,7 @@ def load_messages():
     """
     check_session(session)
     if session.get('user_id') is None:
-        messages_history = [{"role": "assistant", "content": project_info},
-                            {"role": "assistant", "content": "#### 当前浏览器会话为首次请求\n"
-                                                             "#### 请输入已有用户`id`或创建新的用户`id`。\n"
-                                                             "- 已有用户`id`请在输入框中直接输入\n"
-                                                             "- 创建新的用户`id`请在输入框中输入`new:xxx`,其中`xxx`为你的自定义id，请牢记\n"
-                                                             "- 输入`帮助`以获取帮助提示"}]
+        messages_history = [{"name": "assistant", "content": project_info}]
     else:
         user_info = get_user_info(session.get('user_id'))
         chat_id = user_info['selected_chat_id']
@@ -316,11 +213,7 @@ def new_chat_dict(user_id, name, send_time):
     return {"chat_with_history": False,
             "have_chat_context": 0,  # 从每次重置聊天模式后开始重置一次之后累计
             "name": name,
-            "messages_history": [{"role": "assistant", "content": project_info},
-                                 {"role": "system", "content": f"当前对话的用户id为{user_id}"},
-                                 {"role": "system", "content": send_time},
-                                 {"role": "system", "content": f"你已添加了{name}，现在可以开始聊天了。"},
-                                 ]}
+            "messages_history": [{"name": default_user, "content": "创建了一个新的会话"}]}
 
 
 def new_user_dict(user_id, send_time):
@@ -329,59 +222,10 @@ def new_user_dict(user_id, send_time):
                  "selected_chat_id": chat_id,
                  "default_chat_id": chat_id}
 
-    user_dict['chats'][chat_id]['messages_history'].insert(1, {"role": "assistant",
-                                                               "content": "- 创建新的用户id成功，请牢记该id  \n"
-                                                                          })
+    # user_dict['chats'][chat_id]['messages_history'].insert(1, {"name": "assistant",
+    #                                                            "content": "- 创建新的用户id成功，请牢记该id  \n"
+    #                                                                       })
     return user_dict
-
-
-def get_balance(apikey):
-    head = ""
-    if apikey is not None:
-        head = "###  用户专属api key余额  \n"
-    else:
-        head = "### 通用api key  \n"
-        apikey = API_KEY
-
-    subscription_url = "https://api.openai.com/v1/dashboard/billing/subscription"
-    headers = {
-        "Authorization": "Bearer " + apikey,
-        "Content-Type": "application/json"
-    }
-    subscription_response = requests.get(subscription_url, headers=headers)
-    if subscription_response.status_code == 200:
-        data = subscription_response.json()
-        total = data.get("hard_limit_usd")
-    else:
-        return head+subscription_response.text
-
-    # start_date设置为今天日期前99天
-    start_date = (datetime.datetime.now() - datetime.timedelta(days=99)).strftime("%Y-%m-%d")
-    # end_date设置为今天日期+1
-    end_date = (datetime.datetime.now() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-    billing_url = f"https://api.openai.com/v1/dashboard/billing/usage?start_date={start_date}&end_date={end_date}"
-    billing_response = requests.get(billing_url, headers=headers)
-    if billing_response.status_code == 200:
-        data = billing_response.json()
-        total_usage = data.get("total_usage") / 100
-        daily_costs = data.get("daily_costs")
-        days = min(5, len(daily_costs))
-        recent = f"##### 最近{days}天使用情况  \n"
-        for i in range(days):
-            cur = daily_costs[-i-1]
-            date = datetime.datetime.fromtimestamp(cur.get("timestamp")).strftime("%Y-%m-%d")
-            line_items = cur.get("line_items")
-            cost = 0
-            for item in line_items:
-                cost += item.get("cost")
-            recent += f"\t{date}\t{cost / 100} \n"
-    else:
-        return head+billing_response.text
-
-    return head+f"\n#### 总额:\t{total:.4f}  \n" \
-                f"#### 已用:\t{total_usage:.4f}  \n" \
-                f"#### 剩余:\t{total-total_usage:.4f}  \n" \
-                f"\n"+recent
 
 
 @app.route('/returnMessage', methods=['GET', 'POST'])
@@ -390,6 +234,7 @@ def return_message():
     获取用户发送的消息，调用get_chat_response()获取回复，返回回复，用于更新聊天框
     :return:
     """
+    print('return_message')
     check_session(session)
     send_message = request.values.get("send_message").strip()
     send_time = request.values.get("send_time").strip()
@@ -482,10 +327,6 @@ def return_message():
                 asyncio.run(save_all_user_dict())
                 print("修改用户id:\t", new_user_id)
                 return f"修改成功,请牢记新的用户id为:{new_user_id}"
-        elif send_message == "查余额":
-            user_info = get_user_info(session.get('user_id'))
-            apikey = user_info.get('apikey')
-            return get_balance(apikey)
         else:  # 处理聊天数据
             user_id = session.get('user_id')
             print(f"用户({user_id})发送消息:{send_message}")
@@ -493,34 +334,28 @@ def return_message():
             chat_id = user_info['selected_chat_id']
             messages_history = user_info['chats'][chat_id]['messages_history']
             chat_with_history = user_info['chats'][chat_id]['chat_with_history']
-            apikey = user_info.get('apikey')
-            if chat_with_history:
-                user_info['chats'][chat_id]['have_chat_context'] += 1
-            if send_time != "":
-                messages_history.append({'role': 'system', "content": send_time})
+            # apikey = user_info.get('apikey')
+            # if chat_with_history:
+            #     user_info['chats'][chat_id]['have_chat_context'] += 1
+            # if send_time != "":
+            #     messages_history.append({'name': 'system', "content": send_time})
             if not STREAM_FLAG:
-                content = handle_messages_get_response(send_message, apikey, messages_history,
+                content = handle_messages_get_response(send_message, messages_history,
                                                        user_info['chats'][chat_id]['have_chat_context'],
                                                        chat_with_history)
-                # content = "可以"
-                query = send_message
-                content = chain(
-                    {"query": query+"(用中文回答，不要用英文回答。如果没有答案输出：我不知道)"})
-                content = content['result']
-                print(f"用户({session.get('user_id')})得到的回复消息:{content[:40]}...")
-                if chat_with_history:
-                    user_info['chats'][chat_id]['have_chat_context'] += 1
-                # 异步存储all_user_dict
-                asyncio.run(save_all_user_dict())
-                return content
+                random_index = randint(0, len(all_users)-1)
+                name = all_users[random_index]
+               
+                return jsonify({"name": name, "content": content})
+
             else:
-                generate = handle_messages_get_response_stream(send_message, apikey, messages_history,
+                generate = handle_messages_get_response_stream(send_message, messages_history,
                                                                user_info['chats'][chat_id]['have_chat_context'],
                                                                chat_with_history)
 
                 if chat_with_history:
                     user_info['chats'][chat_id]['have_chat_context'] += 1
-
+               
                 return app.response_class(generate(), mimetype='application/json')
 
 
@@ -569,12 +404,12 @@ def change_mode(status):
     if status == "normal":
         user_info['chats'][chat_id]['chat_with_history'] = False
         print("开启普通对话")
-        message = {"role": "system", "content": "切换至普通对话"}
+        message = {"name": "system", "content": "切换至普通对话"}
     else:
         user_info['chats'][chat_id]['chat_with_history'] = True
         user_info['chats'][chat_id]['have_chat_context'] = 0
         print("开启连续对话")
-        message = {"role": "system", "content": "切换至连续对话"}
+        message = {"name": "system", "content": "切换至连续对话"}
     user_info['chats'][chat_id]['messages_history'].append(message)
     return {"code": 200, "data": message}
 
@@ -637,73 +472,33 @@ def delete_history():
     user_info['selected_chat_id'] = default_chat_id
     return "2"
 
-
-def check_load_pickle():
-    global all_user_dict
-
-    if os.path.exists(USER_DICT_FILE):
-        with open(USER_DICT_FILE, "rb") as pickle_file:
-            all_user_dict = pickle.load(pickle_file)
-            all_user_dict.change_capacity(USER_SAVE_MAX)
-        print(f"已加载上次存储的用户上下文，共有{len(all_user_dict)}用户, 分别是")
-        for i, user_id in enumerate(list(all_user_dict.keys())):
-            print(f"{i} 用户id:{user_id}\t对话统计:\t", end="")
-            user_info = all_user_dict.get(user_id)
-            for chat_id in user_info['chats'].keys():
-                print(f"{user_info['chats'][chat_id]['name']}[{len(user_info['chats'][chat_id]['messages_history'])}] ",
-                      end="")
-            print()
-    elif os.path.exists("all_user_dict.pkl"):  # 适配当出现这个时
-        print('检测到v1版本的上下文，将转换为v2版本')
-        with open("all_user_dict.pkl", "rb") as pickle_file:
-            all_user_dict = pickle.load(pickle_file)
-            all_user_dict.change_capacity(USER_SAVE_MAX)
-        print("共有用户", len(all_user_dict), "个")
-        for user_id in list(all_user_dict.keys()):
-            user_info: dict = all_user_dict.get(user_id)
-            if "messages_history" in user_info:
-                user_dict = new_user_dict(user_id, "")
-                chat_id = user_dict['selected_chat_id']
-                user_dict['chats'][chat_id]['messages_history'] = user_info['messages_history']
-                user_dict['chats'][chat_id]['chat_with_history'] = user_info['chat_with_history']
-                user_dict['chats'][chat_id]['have_chat_context'] = user_info['have_chat_context']
-                all_user_dict.put(user_id, user_dict)  # 更新
-        asyncio.run(save_all_user_dict())
-    else:
-        with open(USER_DICT_FILE, "wb") as pickle_file:
-            pickle.dump(all_user_dict, pickle_file)
-        print("未检测到上次存储的用户上下文，已创建新的用户上下文")
-
-    # 判断all_user_dict是否为None且时LRUCache的对象
-    if all_user_dict is None or not isinstance(all_user_dict, LRUCache):
-        print("all_user_dict为空或不是LRUCache对象，已创建新的LRUCache对象")
-        all_user_dict = LRUCache(USER_SAVE_MAX)
-
+def init_users():
+    with open(f"{os.getcwd()}/users.json") as f:
+        users = json.load(f)
+    
+    return [ user['name'] for user in users]
 
 if __name__ == '__main__':
-    print("持久化存储文件路径为:", os.path.join(os.getcwd(), USER_DICT_FILE))
-    all_user_dict = LRUCache(USER_SAVE_MAX)
-    check_load_pickle()
-
-    if len(API_KEY) == 0:
-        # 退出程序
-        print("请在openai官网注册账号，获取api_key填写至程序内或命令行参数中")
-        exit()
+    # print("持久化存储文件路径为:", os.path.join(os.getcwd(), USER_DICT_FILE))
     
-    llm = OpenAI(model_name="gpt-3.5-turbo",max_tokens=102)
-    llm("怎么评价人工智能")
-    loader = PyPDFLoader("./腾讯会议知识库.pdf")
-    # pages = loader.load_and_split()
-    pages = loader.load()
-    #基于seperator划分，如果两个seperator之间的距离大于chunk_size,该chunk的size会大于chunk_size
-    text_splitter = CharacterTextSplitter( separator = "。",chunk_size=100, chunk_overlap=0)
-    #先基于seperators[0]划分，如果两个seperators[0]之间的距离大于chunk_size，使用seperators[1]继续划分......
-    # text_splitter = RecursiveCharacterTextSplitter( separators = ["\n \n","。",",",],chunk_size=500, chunk_overlap=0)
-    split_docs = text_splitter.split_documents(pages)
-    print("chunk numbers :{}".format(len(split_docs)))
-    embeddings = OpenAIEmbeddings()
-    docsearch = Chroma.from_documents(split_docs, embeddings)
-    print("完成向量化")
-    chain = VectorDBQA.from_chain_type(llm=OpenAI(model_name="gpt-3.5-turbo",max_tokens=512,temperature=0), chain_type="stuff", vectorstore=docsearch,return_source_documents=True)
-    print(docsearch.similarity_search("新版会员的价格是多少呢？",k=4))
+    all_user_dict = LRUCache(USER_SAVE_MAX)
+    all_users = init_users()
+
+
+    # model = llm.get()
+
+    # loader = PyPDFLoader("./腾讯会议知识库.pdf")
+    # # pages = loader.load_and_split()
+    # pages = loader.load()
+    # #基于seperator划分，如果两个seperator之间的距离大于chunk_size,该chunk的size会大于chunk_size
+    # text_splitter = CharacterTextSplitter( separator = "。",chunk_size=100, chunk_overlap=0)
+    # #先基于seperators[0]划分，如果两个seperators[0]之间的距离大于chunk_size，使用seperators[1]继续划分......
+    # # text_splitter = RecursiveCharacterTextSplitter( separators = ["\n \n","。",",",],chunk_size=500, chunk_overlap=0)
+    # split_docs = text_splitter.split_documents(pages)
+    # print("chunk numbers :{}".format(len(split_docs)))
+    # embeddings = test_embedding.get()
+    # docsearch = Chroma.from_documents(split_docs, embeddings)
+    # print("完成向量化")
+    # chain = VectorDBQA.from_chain_type(llm=model, chain_type="stuff", vectorstore=docsearch,return_source_documents=True)
+    # print(docsearch.similarity_search("新版会员的价格是多少呢？",k=4))
     app.run(host="0.0.0.0", port=PORT, debug=False)

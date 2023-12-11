@@ -583,12 +583,10 @@
                 let messages = data.data;
                 var html = "";
                 for (var i = 0; i < messages.length; i++) {
-                    if (messages[i].role === "user") {
-                        html += '<div class="item item-right"><div class="bubble bubble-right">' + messages[i].content + '</div><div class="avatar"><img src="./static/people.jpg" /></div></div>';
-                    } else if(messages[i].role === "assistant"){
-                        html += '<div class="item item-left"><div class="avatar"><img src="./static/icon.png" /></div><div class="bubble bubble-left markdown">' + marked.marked(messages[i].content) + '</div></div>';
-                    } else if (messages[i].role === "system") {
-                        html += '<div class="item item-center"><span>' + messages[i].content + '</span></div>';
+                    if (messages[i].name === "tingxin") {
+                        html += '<div class="item item-right"><div class="bubble bubble-right">' + messages[i].content + '</div><div class="avatar"><img src="./static/'+ messages[i].name +'.jpg" /></div></div>';
+                    } else{
+                        html += '<div class="item item-left"><div class="avatar"><img src="./static/'+messages[i].name+'.jpg" /></div><div class="bubble bubble-left markdown">' + marked.marked(messages[i].content) + '</div></div>';
                     }
                 }
                 $(".content").append(html);
@@ -668,14 +666,12 @@
             last_time = send_time.getTime();
             send_time_str = get_time_str(send_time);
         }
-        html += '<div class="item item-right"><div class="bubble bubble-right markdown">' + marked.marked(text) + '</div><div class="avatar"><img src="./static/people.jpg" /></div></div>';
+        html += '<div class="item item-right"><div class="bubble bubble-right markdown">' + marked.marked(text) + '</div><div class="avatar"><img src="./static/tingxin.jpg" /></div></div>';
         $(".content").append(html);
         $("#textarea").val("");
         $(".content").scrollTop($(".content")[0].scrollHeight);
         if(text.startsWith('new:')) send_time_str = get_time_str(send_time)
-        let chat_item = $('<div class="item item-left"><div class="avatar"><img src="./static/icon.png" /></div><div class="bubble bubble-left markdown">正在等待回复</div></div>')
-        $(".content").append(chat_item);
-        $(".content").scrollTop($(".content")[0].scrollHeight);
+
         let get_times = 0;
         returnMessageAjax = $.ajax({
             url: "/returnMessage",
@@ -696,12 +692,18 @@
                         if (get_times === 2) {
                             $("#stop-btn").show();
                         }
-                        let div =  document.createElement('div');
-                        div.innerHTML = marked.marked(response);
-                        MathJax.Hub.Typeset(div);
-                        chat_item.find(".bubble").empty();
-                        chat_item.find(".bubble").append(div);
+                        // let div =  document.createElement('div');
+                        // div.innerHTML = marked.marked(response);
+                        // MathJax.Hub.Typeset(div);
+                        var jsonString = JSON.parse(response);
+        
+                        content = jsonString['content']
+                        name = jsonString['name']
+                        let chat_item = $('<div class="item item-left"><div class="avatar"><img src="./static/'+name+'.jpg" /></div><div class="bubble bubble-left markdown">'+content+'</div></div>')
+                        $(".content").append(chat_item);
                         $(".content").scrollTop($(".content")[0].scrollHeight);
+                        let btn = $("<span class=\"code-copy-btn\" onclick='codeCopy(this)'>复制代码</span>");
+                        btn.prependTo(chat_item.find(".bubble").find("pre"));
                     }
                 },
                 onload: function (e) {
@@ -714,8 +716,7 @@
                     alert("请求超时");
                 }
                 $("#stop-btn").hide();
-                let btn = $("<span class=\"code-copy-btn\" onclick='codeCopy(this)'>复制代码</span>");
-                btn.prependTo(chat_item.find(".bubble").find("pre"));
+
             }
         });
     });

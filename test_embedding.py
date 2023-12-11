@@ -51,12 +51,6 @@ embeddings = SagemakerEndpointEmbeddings(
     content_handler=content_handler,
 )
 
-# query_result = embeddings.embed_query("foo")
-# print(query_result)
-
-doc_results = embeddings.embed_documents(["foo"])
-print(doc_results)
-
 
 def get():
     return embeddings
