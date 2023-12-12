@@ -1,7 +1,6 @@
 # 使用大预言模型构建咨询系统
 ## 准备数据
 ```
-We need to first download the [Ray documentation](https://docs.ray.io/) to a directory:
 ```bash
 export EFS_DIR=/home/ec2-user/datasets
 wget -e robots=off --recursive --no-clobber --page-requisites \

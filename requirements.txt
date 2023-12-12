@@ -9,3 +9,4 @@ unstructured
 chromadb
 openai
 tiktoken
+opensearch-py

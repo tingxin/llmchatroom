@@ -20,6 +20,8 @@ import test_embedding
 import llm
 import queryllm
 from random import randint
+import opensearch
+
 
 default_user = "tingxin"
 
@@ -55,6 +57,7 @@ def get_message_context(message_history, have_chat_context, chat_with_history):
     :return:
     """
     message_context = []
+
     total = 0
     if chat_with_history:
         num = min([len(message_history), CHAT_CONTEXT_NUMBER_MAX, have_chat_context])
@@ -78,7 +81,13 @@ def get_message_context(message_history, have_chat_context, chat_with_history):
         message_context.append(message_history[-1])
         total += len(message_history[-1]['content'])
 
+    msg = ','.join([item['content'] for item in message_history])
+    query_response = test_embedding.query_endpoint(msg.encode('utf-8'))
+    embedding, text_content = test_embedding.parse_response(query_response)
+    text = opensearch.search(embedding, text_content)
+    print(embedding)
     print(f"len(message_context): {len(message_context)} total: {total}",)
+    message_context.append(text)
     return message_context
 
 
@@ -94,7 +103,8 @@ def handle_messages_get_response(message, message_history, have_chat_context, ch
     message_history.append({"name": default_user, "content": message})
     message_context = get_message_context(message_history, have_chat_context, chat_with_history)
 
-    prompts =[f"hi, 我的名字叫 {item['name']}, 这个问题我认为是这样的：\n {item['content']}" for item in message_context]
+
+    prompts =[f"hi, 我的名字叫 {item['name']}, 这个问题我认为是这样的：\n {item['content']}" for item in message_context if item!=""]
     prompt = ','.join(prompts)
 
     response = get_response_from_llm(prompt)
@@ -343,8 +353,12 @@ def return_message():
                 content = handle_messages_get_response(send_message, messages_history,
                                                        user_info['chats'][chat_id]['have_chat_context'],
                                                        chat_with_history)
-                random_index = randint(0, len(all_users)-1)
-                name = all_users[random_index]
+                if send_message.startswith("@"):
+                    index = send_message.find(' ')
+                    name = send_message[1:index]
+                else:
+                    random_index = randint(0, len(all_users)-1)
+                    name = all_users[random_index]
                
                 return jsonify({"name": name, "content": content})
 
@@ -484,21 +498,4 @@ if __name__ == '__main__':
     all_user_dict = LRUCache(USER_SAVE_MAX)
     all_users = init_users()
 
-
-    # model = llm.get()
-
-    # loader = PyPDFLoader("./腾讯会议知识库.pdf")
-    # # pages = loader.load_and_split()
-    # pages = loader.load()
-    # #基于seperator划分，如果两个seperator之间的距离大于chunk_size,该chunk的size会大于chunk_size
-    # text_splitter = CharacterTextSplitter( separator = "。",chunk_size=100, chunk_overlap=0)
-    # #先基于seperators[0]划分，如果两个seperators[0]之间的距离大于chunk_size，使用seperators[1]继续划分......
-    # # text_splitter = RecursiveCharacterTextSplitter( separators = ["\n \n","。",",",],chunk_size=500, chunk_overlap=0)
-    # split_docs = text_splitter.split_documents(pages)
-    # print("chunk numbers :{}".format(len(split_docs)))
-    # embeddings = test_embedding.get()
-    # docsearch = Chroma.from_documents(split_docs, embeddings)
-    # print("完成向量化")
-    # chain = VectorDBQA.from_chain_type(llm=model, chain_type="stuff", vectorstore=docsearch,return_source_documents=True)
-    # print(docsearch.similarity_search("新版会员的价格是多少呢？",k=4))
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    app.run(host="0.0.0.0", port=5018, debug=False)

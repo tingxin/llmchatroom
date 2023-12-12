@@ -3,7 +3,7 @@ from typing import Dict, List
 
 from langchain.embeddings import SagemakerEndpointEmbeddings
 from langchain.embeddings.sagemaker_endpoint import EmbeddingsContentHandler
-
+import boto3
 
 class ContentHandler(EmbeddingsContentHandler):
     content_type = "application/x-text"
@@ -54,3 +54,15 @@ embeddings = SagemakerEndpointEmbeddings(
 
 def get():
     return embeddings
+
+
+def query_endpoint(encoded_text):
+    endpoint_name = 'jumpstart-dft-sentence-encoder-cmlm-en-large-1'
+    client = boto3.client('runtime.sagemaker')
+    response = client.invoke_endpoint(EndpointName=endpoint_name, ContentType='application/x-text', Body=encoded_text, Accept='application/json;verbose')
+    return response
+
+def parse_response(query_response):
+    model_predictions = json.loads(query_response['Body'].read())
+    embedding, model_output = model_predictions['embedding'], model_predictions['model_output']
+    return embedding, model_output
